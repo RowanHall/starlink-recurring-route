@@ -1,0 +1,164 @@
+body {
+  background: #fff;
+  color: #222;
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.site-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid #e2e2e2;
+}
+
+.site-title {
+  font-size: 1rem;
+  font-weight: bold;
+}
+
+/* Slide switch */
+.switch {
+  flex: none;
+  position: relative;
+  display: inline-block;
+  width: 46px;
+  height: 26px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  inset: 0;
+  background: #ccc;
+  border-radius: 26px;
+  transition: background 0.2s ease;
+  cursor: pointer;
+}
+
+.slider::before {
+  content: "";
+  position: absolute;
+  height: 20px;
+  width: 20px;
+  left: 3px;
+  top: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s ease;
+}
+
+.switch input:checked + .slider {
+  background: #4a7dff;
+}
+
+.switch input:checked + .slider::before {
+  transform: translateX(20px);
+}
+
+.switch input:focus-visible + .slider {
+  outline: 2px solid #4a7dff;
+  outline-offset: 2px;
+}
+
+main {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 3rem 1.5rem;
+}
+
+h1 {
+  font-size: 1.8rem;
+  margin: 0 0 0.5rem;
+}
+
+h2 {
+  font-size: 1.2rem;
+  margin: 2.5rem 0 0.75rem;
+}
+
+.affiliation {
+  color: #666;
+  font-size: 0.95rem;
+  margin: 0 0 1.5rem;
+}
+
+.downloads {
+  margin: 1.5rem 0 0;
+}
+
+.pdf-link {
+  display: inline-block;
+  padding: 0.5rem 1rem;
+  border: 1px solid #15c;
+  border-radius: 5px;
+  text-decoration: none;
+}
+
+.pdf-link:hover {
+  background: #15c;
+  color: #fff;
+}
+
+body.dark .pdf-link {
+  border-color: #7fa8ff;
+}
+
+body.dark .pdf-link:hover {
+  background: #7fa8ff;
+  color: #15171c;
+}
+
+.team ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.team li {
+  margin-bottom: 1rem;
+}
+
+.person-name {
+  display: block;
+  font-weight: bold;
+}
+
+.person-links {
+  display: block;
+  font-size: 0.9rem;
+}
+
+a {
+  color: #15c;
+}
+
+/* Dark mode */
+body.dark {
+  background: #15171c;
+  color: #e6e6e6;
+}
+
+body.dark .site-header {
+  border-bottom-color: #333;
+}
+
+body.dark .affiliation {
+  color: #9aa0ab;
+}
+
+body.dark a {
+  color: #7fa8ff;
+}
+
+body.dark .slider {
+  background: #444;
+}

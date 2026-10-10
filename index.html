@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mobile Starlink Performance over Recurring Route</title>
+  <meta name="description" content="CSC 466 research project, University of Victoria." />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <span class="site-title">Mobile Starlink Performance over Recurring Route</span>
+    <label class="switch" title="Toggle dark mode">
+      <input type="checkbox" id="theme-toggle" />
+      <span class="slider"></span>
+    </label>
+  </header>
+
+  <main>
+    <h1>Mobile Starlink Performance over Recurring Route</h1>
+
+    <p class="affiliation">
+      CSC 466 &middot; Department of Computer Science &middot; University of Victoria
+    </p>
+
+    <p>
+      We are studying how Starlink (LEO satellite internet) performs when the
+      receiver is on a moving vehicle. Our project uses about 1.5 years of
+      network measurements collected from a school bus that drives the same route
+      every weekday, to understand where and why performance changes along the way.
+    </p>
+
+    <p class="downloads">
+      <a href="assets/proposal.pdf" class="pdf-link">Read the project proposal (PDF)</a>
+    </p>
+
+    <section class="team">
+      <h2>Team</h2>
+      <ul>
+        <li>
+          <span class="person-name">Jasper McLennan</span>
+          <span class="person-links">
+            <a href="mailto:jaspermclennan@uvic.ca">jaspermclennan@uvic.ca</a>
+            &middot;
+            <a href="https://github.com/jaspermclennan">github.com/jaspermclennan</a>
+          </span>
+        </li>
+        <li>
+          <span class="person-name">Rowan Hall</span>
+          <span class="person-links">
+            <a href="mailto:rowanhall@uvic.ca">rowanhall@uvic.ca</a>
+            &middot;
+            <a href="https://github.com/RowanHall">github.com/RowanHall</a>
+          </span>
+        </li>
+      </ul>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      var box = document.getElementById("theme-toggle");
+      var saved = localStorage.getItem("theme");
+      var systemDark = window.matchMedia("(prefers-color-scheme: dark)");
+
+      function apply(dark) {
+        document.body.classList.toggle("dark", dark);
+        box.checked = dark;
+      }
+
+      // Follow the OS setting unless the user has picked one manually.
+      apply(saved ? saved === "dark" : systemDark.matches);
+
+      systemDark.addEventListener("change", function (e) {
+        if (!localStorage.getItem("theme")) apply(e.matches);
+      });
+
+      box.addEventListener("change", function () {
+        document.body.classList.toggle("dark", box.checked);
+        localStorage.setItem("theme", box.checked ? "dark" : "light");
+      });
+    })();
+  </script>
+</body>
+</html>
