@@ -37,124 +37,92 @@
 %Rowan
 \section{Project Overview}
 
-Our project studies how a Starlink terminal performs on a moving vehicle when that vehicle drives the same route over and over. The terminal (a mobile \texttt{hp1} dish in the \texttt{MOBILE} service class) is mounted on a school bus that runs along Highway~14 on the west coast of Vancouver Island, between the Port Renfrew/Pacheedaht area and the western edge of Greater Victoria (roughly $48.36^\circ$--$48.58^\circ$N, $123.54^\circ$--$124.42^\circ$W). The bus makes the trip twice per school day: a morning run leaving around 06:20 local time and an afternoon run leaving around 14:20. Each run takes about two and a half hours.
+We are studying how a Starlink dish performs on a moving vehicle that drives the same route every day. The dish is mounted on a school bus that runs along Highway~14 between Port Renfrew and the western edge of Greater Victoria. The bus makes the trip twice per school day, once in the morning (around 6:20am) and once in the afternoon (around 2:20pm), and each trip takes about two and a half hours.
 
-An on-board logger records data in 30-minute \emph{windows}, grouped into \emph{sessions} (one session per trip). Each window holds several data sources, summarized in Table~\ref{tab:sources}. The raw data is compressed (\texttt{.tar.zst}) and stored in a cloud bucket. We pull it down with \texttt{rclone} and then run the \texttt{leoviz} tool (a Docker image) on each window. \texttt{leoviz} merges the dish's attitude with its GPS fix (\texttt{POSE\_TRACK}) and estimates which satellite the dish was connected to at each moment (\texttt{SATELLITE\_ESTIMATION}). It does this by matching the dish's obstruction map against public orbital elements (TLEs).
+A logger on the bus saves data in 30-minute chunks, grouped by trip. The main things it records are:
+\begin{itemize}
+    \item \textbf{Dish status} (twice a second): latency, packet loss, throughput, signal quality, and whether the dish is obstructed.
+    \item \textbf{GPS} (twice a second): the bus's position and speed.
+    \item \textbf{Outages}: every time the dish loses connection, with a cause (e.g.\ obstructed, searching for satellites) and a duration.
+    \item \textbf{High-rate pings}: a ping every 10~ms, which gives a much finer view of latency than the dish status.
+\end{itemize}
 
-\begin{table}[h]
-\centering
-\small
-\begin{tabular}{|l|p{3.4in}|l|}
-\hline
-\textbf{Source} & \textbf{Contents} & \textbf{Rate} \\
-\hline
-\texttt{GRPC\_STATUS} & PoP ping latency and drop rate, throughput, SNR, obstruction, attitude & $\sim$2 Hz \\
-\texttt{GRPC\_LOCATION} & Dish GPS position, horizontal speed, accuracy & $\sim$2 Hz \\
-\texttt{GRPC\_OUTAGES} / \texttt{EVENTS} & Dish-reported outages with cause and duration & per event \\
-\texttt{latency/ping-*.txt} & ICMP pings to the gateway and to the local router & every 10 ms \\
-\texttt{obstruction\_maps} & Dish obstruction map snapshots & every 15 s \\
-\texttt{tle} / \texttt{public\_ip} & Satellite orbital elements, public IP / PoP mapping & per window \\
-\texttt{POSE\_TRACK} (\texttt{leoviz}) & GPS joined with dish orientation & $\sim$2 Hz \\
-\texttt{SATELLITE\_ESTIMATION} (\texttt{leoviz}) & Estimated serving satellite and match quality & $\sim$2 Hz \\
-\hline
-\end{tabular}
-\caption{Data sources available in each 30-minute window.}
-\label{tab:sources}
-\end{table}
-
-The overall goal has not changed since our proposal (Sections~\ref{sec:problem}--\ref{sec:approach}). Because the bus follows a fixed route, we can tell apart (1) problems tied to a \emph{place} on the road, such as trees, hills, and road cuts, (2) problems tied to \emph{time}, such as time of day, load, and weather, and (3) problems tied to \emph{the satellite system}, such as handovers. This first update covers the data pipeline: getting raw logs into one clean, aligned dataset, and the first look at that dataset.
+We process each chunk with a tool called \texttt{leoviz}, which lines up the GPS with the dish's orientation and estimates which satellite the dish was connected to at each moment. That satellite estimate is what we will use to find handovers.
 
 \section{Progress}
 
-\subsection{Data acquisition and preprocessing}
-The data we have synced and processed so far covers \textbf{84 sessions (297 windows) between September 9 and October 22, 2026}, about 9~GB of extracted data. Most sessions are full trips: 27 morning runs and 27 afternoon runs. The other 30 are short sessions (one window each) recorded in the middle of the day. We wrote a script (\texttt{process.sh}) that decompresses every window and runs \texttt{leoviz} on it. \texttt{leoviz} finished successfully on 289 of the 297 windows. The other 8 windows are missing \texttt{POSE\_TRACK} output and need to be looked into.
+\textbf{Data so far.} We have downloaded and processed 84 trips from September 9 to October 22, 2026 (about 9~GB). Most of these are full morning or afternoon runs, plus some short mid-day recordings.
 
-\subsection{Cleaning and merging pipeline}
-Our analysis is split into three numbered Python scripts (\texttt{pandas}, \texttt{pyarrow}, \texttt{folium}):
-
+\textbf{Cleaning pipeline.} We wrote three Python scripts that run in order:
 \begin{enumerate}
-    \item \textbf{\texttt{01\_build\_dataset.py}: merge.} For each window, this script loads the telemetry from \texttt{GRPC\_STATUS} and keeps the 14 columns we care about (latency, drop rate, throughput, SNR flags, obstruction, GPS health, uptime). It drops the raw quaternions and internal flags. Each telemetry row is then matched to the closest GPS/attitude row from \texttt{POSE\_TRACK} with a nearest-timestamp join (\texttt{merge\_asof}, $\pm$2~s tolerance). Rows that have no GPS match within that tolerance are dropped. Next, each row is labelled with an outage cause whenever its timestamp falls inside an outage interval from \texttt{GRPC\_OUTAGES}. We use the Unix-epoch start time, not the GPS-epoch one, and add the reported duration to get the end time. Last, the script adds session and window IDs, converts throughput to Mbps, and writes everything to a single Parquet file.
-    \item \textbf{\texttt{02\_grid\_analysis.py}: spatial binning.} This script snaps each sample to a $0.001^\circ$ grid ($\sim$100~m cells). For each cell it computes the median and 90th-percentile latency, median throughput, signal quality, ping drop rate, outage rate, the most common outage cause, and how many samples and sessions it contains.
-    \item \textbf{\texttt{03\_map.py}: visualization.} This script draws an interactive Leaflet map with three switchable layers (latency, outage rate, downlink). It is meant to be published on our project GitHub Pages site.
+    \item \textbf{Merge:} combines the dish status, GPS, and outage data for every trip into one table. Each status reading is matched to the closest GPS point in time (within 2 seconds), readings without a GPS match are dropped, and each reading is marked if it happened during an outage.
+    \item \textbf{Grid:} splits the route into roughly 100~m squares and calculates the typical latency, throughput, and outage rate in each square.
+    \item \textbf{Map:} draws an interactive map of the route coloured by latency, outage rate, or throughput, to put on our project website.
 \end{enumerate}
 
-\subsection{First look at the merged data}
-The current merged dataset has \textbf{762,097 samples from 57 sessions, 216 windows, and 29 days}, recorded about every 0.5~s. Some early observations:
-
+\textbf{First results.} The merged dataset has about 760,000 readings from 57 trips. Some early findings:
 \begin{itemize}
-    \item \textbf{Latency is usually good, with a long tail.} The median PoP ping latency is 20.7~ms and the 75th percentile is 23.4~ms, but the maximum is above 3~s. The bad periods are short spikes, not a slower baseline.
-    \item \textbf{Outages are common.} 8.0\% of samples fall inside a dish-reported outage. By cause: \texttt{SKY\_SEARCH} 4.6\%, \texttt{OBSTRUCTED} 1.9\%, \texttt{NO\_DOWNLINK} 1.4\%, \texttt{NO\_PINGS} 0.1\%. A rough count gives on the order of $10^4$ separate outage episodes. Notably, \texttt{SKY\_SEARCH} (the dish re-acquiring satellites) shows up more often than plain obstruction.
-    \item \textbf{The route is well covered.} The route spans 1,710 grid cells, and 1,226 of them appear in at least 10 different sessions. That is enough repetition to tell persistent problem spots from one-time events. Among those 1,226 cells, 262 have an outage rate of at least 15\% and 83 have an outage rate of at least 30\%. These are our first candidate hotspots.
-    \item \textbf{Morning and afternoon runs look similar so far.} The median per-trip outage fraction is 8.2\% for the morning run and 7.7\% for the afternoon run. Median latency is 20.5~ms and 21.1~ms.
+    \item Latency is usually good (around 21~ms), but it occasionally spikes to several seconds.
+    \item The dish is in an outage about 8\% of the time. The most common cause is the dish searching for satellites, followed by obstructions.
+    \item Most of the route has been driven at least 10 times, so we can already see which spots are bad on most trips. About 80 spots (each about 100~m) are in an outage at least 30\% of the time.
+    \item Morning and afternoon runs look about the same so far.
 \end{itemize}
 
-\subsection{Data quality issues found}
-Looking closely at the merged data turned up several problems that we have to fix before the data counts as ``cleaned''. These are the main focus of our next two weeks (Section~\ref{sec:next}).
-
+\textbf{Problems we found.} While checking the data we found some issues that still need fixing:
 \begin{itemize}
-    \item \textbf{Windows silently dropped.} The last window of every session (74 of 297) ends with a corrupted row padded with null bytes. The logger was most likely cut off when the bus shut down. The timestamp parser fails on that one row, and our script then skips the \emph{entire} window. This accounts for most of the gap between 297 windows on disk and 216 in the dataset. It also means almost all of the short mid-day sessions are missing. In total, about 16\% of the raw telemetry rows are not in the merged file.
-    \item \textbf{Stationary samples.} About 26\% of samples were taken while the bus was moving at less than 1~m/s (at stops, at the depot, or with the engine idling). Because these samples are concentrated in a few grid cells, they give those cells too much weight and mix ``parked'' performance into ``mobile'' performance.
-    \item \textbf{Time zone labels.} Session hours are stored in UTC. The time-of-day breakdown in the grid script treats UTC hour 21 as ``evening'', but it is actually the 14:20 local afternoon run.
-    \item \textbf{Throughput is passive.} The throughput fields only count whatever traffic the bus's users happened to generate (median 0.36~Mbps down). The \texttt{throughput/} directories, which would hold active speed tests, are empty in every window. So downlink throughput tells us about \emph{usage}, not \emph{capacity}, and cannot be used as a performance metric on its own.
-    \item \textbf{Satellite identification is noisy.} We have not merged \texttt{SATELLITE\_ESTIMATION} yet. In a sample of 40 windows, the estimated serving satellite often switches back and forth between candidates within a few seconds. Only about 38\% of 15-second intervals have a single satellite that accounts for more than 80\% of the estimates. Windows with a clean estimate show switches lining up with fixed 15-second boundaries, which matches Starlink's known reconfiguration interval. Before we can count handovers, the raw estimates will need to be smoothed and filtered by confidence.
+    \item \textbf{Missing data:} the last chunk of every trip ends with a corrupted line, probably because the logger is cut off when the bus turns off. Our script throws away the whole chunk when this happens, so about a quarter of the chunks (and most short trips) are missing from the dataset.
+    \item \textbf{Stopped bus:} about a quarter of the readings were taken while the bus was stopped, which skews the results at bus stops and the depot.
+    \item \textbf{Time zones:} times are stored in UTC, so some of our morning/afternoon labels are wrong.
+    \item \textbf{Throughput:} no speed tests were run, so throughput only shows how much passengers were using the connection, not how fast it could be.
+    \item \textbf{Satellite estimates are noisy:} the estimated satellite often jumps back and forth between candidates, so it needs to be smoothed before we can count handovers.
 \end{itemize}
 
 
 %Jasper
 \section{Version Control}
 
-All code and documents live in a single Git repository on GitHub (\texttt{starlink-recurring-route}). It is organized as follows:
+All of our code and reports are in a GitHub repository. The scripts are in \texttt{analysis/}, the project website is in \texttt{gh-pages/}, and these reports are in \texttt{docs/}.
 
-\begin{itemize}
-    \item \texttt{analysis/}: the numbered pipeline scripts (\texttt{01\_}, \texttt{02\_}, \texttt{03\_}). Each one reads the previous script's output, so the whole pipeline can be rerun from raw data in order.
-    \item \texttt{data/}: a \texttt{readme.txt} with the exact \texttt{rclone} and \texttt{docker} commands for fetching and processing the raw data. The data itself is not in the repository.
-    \item \texttt{gh-pages/}: the project website (proposal, and soon the interactive map), served through GitHub Pages.
-    \item \texttt{docs/}: LaTeX sources for these updates and the final report.
-    \item \texttt{requirements.txt}: Python dependencies, installed into a local virtual environment that is not committed.
-\end{itemize}
+The raw data is too big for Git (over 9~GB), so it is not in the repository. Instead, \texttt{data/readme.txt} has the commands to download it from the shared cloud bucket and process it, and our \texttt{.gitignore} keeps the raw data, zip files, and generated data files out of Git. We learned this the hard way: we accidentally committed a 2.6~GB zip file, GitHub rejected the push, and we had to rewrite our commits to remove it. Small outputs like the final map can still be committed so the website works.
 
-\textbf{Keeping data out of Git.} The raw data is far too large for Git: about 9~GB extracted per copy, plus a 2.6~GB archive. GitHub also rejects any file over 100~MB. Early on, we accidentally committed the 2.6~GB archive and the push was rejected. Deleting the file in a later commit did not help, because the large file was still in the history. We fixed this by rewriting our unpushed commits so the archive never appeared. Since then, \texttt{.gitignore} rules exclude the raw session folders, all \texttt{*.zip} archives, and all generated \texttt{*.parquet} files. The source of truth is the read-only cloud bucket plus our scripts: anyone with access can rebuild the dataset by following \texttt{data/readme.txt} and running the scripts in order. Small derived outputs (the grid CSV and the map HTML) can be committed, so the website works without the raw data.
-
-\textbf{Reproducibility.} The \texttt{leoviz} Docker image is pinned to a specific tag (\texttt{20260730}), so the satellite identification will not change underneath us. Two improvements are planned: (1) move \texttt{process.sh} out of \texttt{data/pacheedaht/}, where it is currently ignored by Git, into a tracked \texttt{scripts/} folder; and (2) pin exact package versions in \texttt{requirements.txt} instead of minimum versions.
+Two small things are still to do: move the processing script out of the ignored data folder so it is tracked, and pin exact package versions in \texttt{requirements.txt}.
 
 \section{Next Steps}
 \label{sec:next}
 
-Our next steps fall into three groups. The first finishes the cleaning work. The second and third match the Weeks~3--4 and 5--6 milestones in our schedule.
-
-\textbf{1. Finish cleaning (immediate).}
+\textbf{Finish cleaning:}
 \begin{itemize}
-    \item Remove null bytes and drop bad timestamp rows one row at a time, so a single corrupt line no longer throws away a whole window. Report skipped windows and the reason for each instead of hiding them. Look into the 8 windows that \texttt{leoviz} could not process. Then rebuild the dataset and confirm that all 84 sessions are in it.
-    \item Convert timestamps to local time (\texttt{America/Vancouver}). Label every session as a morning run, an afternoon run, or a mid-day session. Work out the direction of travel from the GPS path, because inbound and outbound trips see the sky differently.
-    \item Join the dish-reported speed from \texttt{GRPC\_LOCATION} and filter out, or separately label, stationary samples (speed below about 1~m/s).
-    \item Replace the lat/lon grid with \emph{distance along the route}: project each GPS point onto a reference path for the route and bin it in 100~m segments. With this one-dimensional view, any two trips can be compared directly segment by segment, and the cells along curves no longer get split unevenly.
-    \item Record throughput as utilization only. Check with the data owners whether active speed tests were ever run, since the \texttt{throughput/} directories are always empty.
+    \item Fix the corrupted-line bug so no chunks are thrown away, then rebuild the dataset.
+    \item Download and process the newer trips (up to November 10).
+    \item Convert times to local time and label each trip as morning or afternoon and by direction.
+    \item Remove or separately label readings taken while the bus was stopped.
+    \item Measure position as distance along the route instead of a grid, so trips can be compared side by side.
 \end{itemize}
 
-\textbf{2. Route hotspot maps (Weeks 3--4).}
+\textbf{Hotspot maps (Weeks 3--4):}
 \begin{itemize}
-    \item Rerun the grid analysis on the cleaned data and publish the interactive map on the project site.
-    \item For each route segment, measure \emph{persistence}: the fraction of trips in which that segment has an outage or a latency spike. This separates spots that fail on almost every trip (most likely physical obstructions) from spots that only fail sometimes.
-    \item Compare morning and afternoon runs, and inbound and outbound trips, segment by segment, and compare weeks to look for early seasonal trends.
+    \item Publish the cleaned map on our website.
+    \item For each part of the route, measure how often it has problems across trips, to separate spots that are bad every day (likely trees or hills) from ones that are only bad sometimes.
+    \item Compare morning vs.\ afternoon, direction of travel, and week-to-week changes.
 \end{itemize}
 
-\textbf{3. Handover analysis (Weeks 5--6).}
+\textbf{Handover analysis (Weeks 5--6):}
 \begin{itemize}
-    \item Merge \texttt{SATELLITE\_ESTIMATION} into the dataset. Reduce the raw estimates to one serving satellite per 15-second slot by majority vote, and drop slots with low match quality (using the \texttt{pixel\_diff\_distance} and \texttt{total\_difference} fields).
-    \item Find handover events and line them up with the \textbf{10~ms ping logs}, which we have not used yet. The dish's 2~Hz latency readings are too coarse to show what happens in the moments around a handover.
-    \item Check whether outages happen more often right after a handover than at random times, and how that depends on location (obstructed segments versus open ones).
+    \item Smooth the satellite estimates and find when the dish switches satellites.
+    \item Use the 10~ms ping data to see what happens to latency right around each switch.
+    \item Check whether outages happen more often right after a switch, and whether that depends on location.
 \end{itemize}
 
 \section{Needed Research}
 
 \begin{itemize}
-    \item \textbf{How \texttt{leoviz} identifies satellites.} We need to understand how its obstruction-map matching works and what its match-quality fields mean, so we can choose sensible confidence thresholds instead of arbitrary ones.
-    \item \textbf{Starlink scheduling and handovers.} Prior measurement work reports that Starlink reassigns satellites on a fixed 15-second schedule. We need to review how other studies found handovers and measured their effect on latency, so our method is comparable.
-    \item \textbf{Meaning of the dish's gRPC fields.} The dish API is not officially documented. We need to rely on community tools and earlier papers to understand outage causes such as \texttt{SKY\_SEARCH} and \texttt{NO\_DOWNLINK}, how \texttt{pop\_ping\_latency\_ms} is measured, and which host the 10~ms ping logs target.
-    \item \textbf{Earlier mobile Starlink studies.} We should survey existing in-motion measurements (cars, trains, ships), both to compare our latency and outage numbers and to state clearly what a repeated-route dataset adds.
-    \item \textbf{Map matching and linear referencing.} We need a simple, reliable way to project noisy GPS onto a single reference route and handle direction of travel.
-    \item \textbf{Outside data for explaining causes.} Historical weather (Environment Canada), and terrain and tree-canopy data (provincial LiDAR and elevation models), could help explain \emph{why} a hotspot happens. We need to check what is available at the resolution we need.
-    \item \textbf{Methods for the final model.} We need to look at change-point and anomaly detection, and at regression models that separate location effects from time effects (for example, mixed-effects models with route segment and trip as grouping factors), for the final ``recurring vs.\ anomalous'' deliverable.
+    \item How \texttt{leoviz} estimates the connected satellite, so we know how much to trust it.
+    \item How Starlink schedules satellite switches (other studies report it happens on a fixed 15-second cycle) and how earlier papers measured handovers.
+    \item What the dish's outage causes and data fields mean, since Starlink does not officially document them.
+    \item Other studies of Starlink on moving vehicles, to compare our results against.
+    \item How to match noisy GPS points to a single route line.
+    \item Where to get historical weather data and tree/terrain data for the route, to help explain why hotspots happen.
+    \item Which methods to use for the final model (e.g.\ anomaly detection, or models that separate location effects from time effects).
 \end{itemize}
 
 \section{Problem}
